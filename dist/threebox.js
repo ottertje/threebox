@@ -526,20 +526,22 @@ Threebox.prototype = {
 					let nearestObject = Threebox.prototype.findParent3DObject(intersects[0]);
 
 					if (nearestObject) {
-						//if extrusion object selected, unselect
+						//if extrusion object selected, unselect, clean the selection
 						if (this.selectedFeature) {
 							this.unselectFeature(this.selectedFeature);
 						}
 						//if not selected yet, select it
-						if (!this.selectedObject) {
+						if (!this.selectedObject && nearestObject.selectable) {
 							this.selectedObject = nearestObject;
 							this.selectedObject.selected = true;
 						}
 						else if (this.selectedObject.uuid != nearestObject.uuid) {
 							//it's a different object, restore the previous and select the new one
-							this.selectedObject.selected = false;
-							nearestObject.selected = true;
-							this.selectedObject = nearestObject;
+							this.unselectObject();
+							if (nearestObject.selectable) {
+								nearestObject.selected = true;
+								this.selectedObject = nearestObject;
+							}
 
 						} else if (this.selectedObject.uuid == nearestObject.uuid) {
 							//deselect, reset and return
@@ -597,7 +599,7 @@ Threebox.prototype = {
 
 				this.getCanvasContainer().style.cursor = this.tb.defaultCursor;
 				//check if being rotated
-				if (e.originalEvent.altKey && this.draggedObject) {
+				if (e.originalEvent.altKey && this.draggedObject && this.draggedObject.rotatable) {
 
 					if (!map.tb.enableRotatingObjects) return;
 					draggedAction = 'rotate';
@@ -617,7 +619,7 @@ Threebox.prototype = {
 				}
 
 				//check if being moved
-				if (e.originalEvent.shiftKey && this.draggedObject) {
+				if (e.originalEvent.shiftKey && this.draggedObject && this.draggedObject.draggable) {
 					if (!map.tb.enableDraggingObjects) return;
 
 					draggedAction = 'translate';
@@ -632,7 +634,7 @@ Threebox.prototype = {
 				}
 
 				//check if being moved on altitude
-				if (e.originalEvent.ctrlKey && this.draggedObject) {
+				if (e.originalEvent.ctrlKey && this.draggedObject && this.draggedObject.draggable && this.draggedObject.altitudeChangeable) {
 					if (!map.tb.enableDraggingObjects) return;
 					draggedAction = 'altitude';
 					// Set a UI indicator for dragging.
@@ -2615,27 +2617,16 @@ class BuildingShadows {
 	}
 	onAdd(map, gl) {
 		this.map = map;
-		const vertexSource = `
-			uniform mat4 u_matrix;
-			uniform float u_height_factor;
-			uniform float u_altitude;
-			uniform float u_azimuth;
-			attribute vec2 a_pos;
-			attribute vec4 a_normal_ed;
-			attribute lowp vec2 a_base;
-			attribute lowp vec2 a_height;
-			void main() {
-				float base = max(0.0, a_base.x);
-				float height = max(0.0, a_height.x);
-				float t = mod(a_normal_ed.x, 2.0);
-				vec4 pos = vec4(a_pos, t > 0.0 ? height : base, 1);
-				float len = pos.z * u_height_factor / tan(u_altitude);
-				pos.x += cos(u_azimuth) * len;
-				pos.y += sin(u_azimuth) * len;
-				pos.z = 0.0;
-				gl_Position = u_matrix * pos;
-			}
-			`;
+		// find layer source
+		const sourceName = this.map.getLayer(this.buildingsLayerId).source;
+		this.source = (this.map.style.sourceCaches || this.map.style._otherSourceCaches)[sourceName];
+		if (!this.source) {
+			console.warn(`Can't find layer ${this.buildingsLayerId}'s source.`);
+		}
+
+		// vertex shader of fill-extrusion layer is different in mapbox v1 and v2.
+		// https://github.com/mapbox/mapbox-gl-js/commit/cef95aa0241e748b396236f1269fbb8270f31565
+		const vertexSource = this._getVertexSource();
 		const fragmentSource = `
 			void main() {
 				gl_FragColor = vec4(0.0, 0.0, 0.0, 0.7);
@@ -2656,15 +2647,22 @@ class BuildingShadows {
 		this.uHeightFactor = gl.getUniformLocation(this.program, "u_height_factor");
 		this.uAltitude = gl.getUniformLocation(this.program, "u_altitude");
 		this.uAzimuth = gl.getUniformLocation(this.program, "u_azimuth");
-		this.aPos = gl.getAttribLocation(this.program, "a_pos");
-		this.aNormal = gl.getAttribLocation(this.program, "a_normal_ed");
+
+		if (this.tb.mapboxVersion >= 2.0) {
+			this.aPosNormal = gl.getAttribLocation(this.program, "a_pos_normal_ed");
+		} else {
+			this.aPos = gl.getAttribLocation(this.program, "a_pos");
+			this.aNormal = gl.getAttribLocation(this.program, "a_normal_ed");
+		}
+
 		this.aBase = gl.getAttribLocation(this.program, "a_base");
 		this.aHeight = gl.getAttribLocation(this.program, "a_height");
 	}
 	render(gl, matrix) {
+		if (!this.source) return;
+
 		gl.useProgram(this.program);
-		const source = this.map.style.sourceCaches['composite'];
-		const coords = source.getVisibleCoordinates().reverse();
+		const coords = this.source.getVisibleCoordinates().reverse();
 		const buildingsLayer = this.map.getLayer(this.buildingsLayerId);
 		const context = this.map.painter.context;
 		const { lng, lat } = this.map.getCenter();
@@ -2680,24 +2678,30 @@ class BuildingShadows {
 		//gl.blendEquation(gl.FUNC_ADD);
 		gl.disable(gl.DEPTH_TEST);
 		for (const coord of coords) {
-			const tile = source.getTile(coord);
+			const tile = this.source.getTile(coord);
 			const bucket = tile.getBucket(buildingsLayer);
 			if (!bucket) continue;
 			const [heightBuffer, baseBuffer] = bucket.programConfigurations.programConfigurations[this.buildingsLayerId]._buffers;
-			gl.uniformMatrix4fv(this.uMatrix, false, coord.posMatrix);
+			gl.uniformMatrix4fv(this.uMatrix, false, (coord.posMatrix || coord.projMatrix));
 			gl.uniform1f(this.uHeightFactor, Math.pow(2, coord.overscaledZ) / tile.tileSize / 8);
 			for (const segment of bucket.segments.get()) {
 				const numPrevAttrib = context.currentNumAttributes || 0;
 				const numNextAttrib = 2;
 				for (let i = numNextAttrib; i < numPrevAttrib; i++) gl.disableVertexAttribArray(i);
 				const vertexOffset = segment.vertexOffset || 0;
-				gl.enableVertexAttribArray(this.aPos);
 				gl.enableVertexAttribArray(this.aNormal);
 				gl.enableVertexAttribArray(this.aHeight);
 				gl.enableVertexAttribArray(this.aBase);
 				bucket.layoutVertexBuffer.bind();
-				gl.vertexAttribPointer(this.aPos, 2, gl.SHORT, false, 12, 12 * vertexOffset);
-				gl.vertexAttribPointer(this.aNormal, 4, gl.SHORT, false, 12, 4 + 12 * vertexOffset);
+				if (this.tb.mapboxVersion >= 2.0) {
+					gl.enableVertexAttribArray(this.aPosNormal);
+					gl.vertexAttribPointer(this.aPosNormal, 4, gl.SHORT, false, 8, 8 * vertexOffset);
+				} else {
+					gl.enableVertexAttribArray(this.aPos);
+					gl.vertexAttribPointer(this.aPos, 2, gl.SHORT, false, 12, 12 * vertexOffset);
+					gl.vertexAttribPointer(this.aNormal, 4, gl.SHORT, false, 12, 4 + 12 * vertexOffset);
+				}
+
 				heightBuffer.bind();
 				gl.vertexAttribPointer(this.aHeight, 1, gl.FLOAT, false, 4, 4 * vertexOffset);
 				baseBuffer.bind();
@@ -2706,6 +2710,57 @@ class BuildingShadows {
 				context.currentNumAttributes = numNextAttrib;
 				gl.drawElements(gl.TRIANGLES, segment.primitiveLength * 3, gl.UNSIGNED_SHORT, segment.primitiveOffset * 3 * 2);
 			}
+		}
+	}
+
+	_getVertexSource() {
+		if (this.tb.mapboxVersion >= 2.0) {
+			return `
+				uniform mat4 u_matrix;
+				uniform float u_height_factor;
+				uniform float u_altitude;
+				uniform float u_azimuth;
+				attribute vec4 a_pos_normal_ed;
+				attribute lowp vec2 a_base;
+				attribute lowp vec2 a_height;
+				void main() {
+					float base = max(0.0, a_base.x);
+					float height = max(0.0, a_height.x);
+
+					vec3 pos_nx = floor(a_pos_normal_ed.xyz * 0.5);
+					mediump vec3 top_up_ny = a_pos_normal_ed.xyz - 2.0 * pos_nx;
+					float t = top_up_ny.x;
+					vec4 pos = vec4(pos_nx.xy, t > 0.0 ? height : base, 1);
+
+					float len = pos.z * u_height_factor / tan(u_altitude);
+					pos.x += cos(u_azimuth) * len;
+					pos.y += sin(u_azimuth) * len;
+					pos.z = 0.0;
+					gl_Position = u_matrix * pos;
+				}
+			`;
+		} else {
+			return `
+				uniform mat4 u_matrix;
+				uniform float u_height_factor;
+				uniform float u_altitude;
+				uniform float u_azimuth;
+				attribute vec2 a_pos;
+				attribute vec4 a_normal_ed;
+				attribute lowp vec2 a_base;
+				attribute lowp vec2 a_height;
+				void main() {
+					float base = max(0.0, a_base.x);
+					float height = max(0.0, a_height.x);
+					float t = mod(a_normal_ed.x, 2.0);
+					vec4 pos = vec4(a_pos, t > 0.0 ? height : base, 1);
+					float len = pos.z * u_height_factor / tan(u_altitude);
+					pos.x += cos(u_azimuth) * len;
+					pos.y += sin(u_azimuth) * len;
+					pos.z = 0.0;
+					gl_Position = u_matrix * pos;
+				}
+			`;
 		}
 	}
 }
@@ -4237,6 +4292,7 @@ function loadObj(options, cb, promise) {
 			break;
 	}
 
+	materialLoader.withCredentials = options.withCredentials;
 	materialLoader.load(options.mtl, loadObject, () => (null), error => {
 		console.warn("No material file found " + error.stack);
 	});
@@ -4248,6 +4304,7 @@ function loadObj(options, cb, promise) {
 			loader.setMaterials(materials);
 		}
 
+		loader.withCredentials = options.withCredentials;
 		loader.load(options.obj, obj => {
 
 			//[jscastro] MTL/GLTF/FBX models have a different structure
@@ -4281,6 +4338,14 @@ function loadObj(options, cb, promise) {
 			userScaleGroup.setAnchor(options.anchor);
 			//[jscastro] override the center calculated if the object has adjustments
 			userScaleGroup.setCenter(options.adjustment);
+			//if the object is selectable
+			userScaleGroup.selectable = options.selectable;
+			//if the object is rotatable
+			userScaleGroup.rotatable = options.rotatable;
+			//if the object is draggable
+			userScaleGroup.draggable = options.draggable;
+			//if the object's altitude can be changed
+			userScaleGroup.altitudeChangeable = options.altitudeChangeable
 			//[jscastro] if the object is excluded from raycasting
 			userScaleGroup.raycasted = options.raycasted;
 			//[jscastro] return to cache
@@ -17913,6 +17978,43 @@ Objects.prototype = {
 				obj.setReceiveShadowFloor();
 			} 
 
+			let _selectable = true;
+			//add selectability property to object
+			Object.defineProperty(obj, 'selectable', {
+				get() { return _selectable; },
+				set(value) {
+					_selectable = value;
+				}
+			});
+
+			let _rotatable = true;
+			//add rotatability property to object
+			Object.defineProperty(obj, 'rotatable', {
+				get() { return _rotatable; },
+				set(value) {
+					_rotatable = value;
+				}
+			});
+
+			let _draggable = true;
+			//add draggability property to object
+			Object.defineProperty(obj, 'draggable', {
+				get() { return _draggable; },
+				set(value) {
+					_draggable = value;
+				}
+			});
+
+			let _altitudeChangeable = true;
+			//add draggability property to object
+			Object.defineProperty(obj, 'altitudeChangeable', {
+				get() { return _altitudeChangeable; },
+				set(value) {
+					_altitudeChangeable = value;
+				}
+			});
+			
+
 		}
 
 		obj.add = function (o) {
@@ -18192,7 +18294,12 @@ Objects.prototype = {
 			bbox: true,
 			tooltip: true,
 			raycasted: true,
-			clone: true
+			clone: true,
+			withCredentials: false,
+			selectable: true,
+			rotatable: true,
+			draggable: true,
+			altitudeChangeable: true
 		},
 
 		Object3D: {
@@ -18215,8 +18322,7 @@ Objects.prototype = {
 			anchor: 'center',
 			bbox: true,
 			tooltip: true,
-			raycasted: true
-
+			raycasted: true,
 		}
 	},
 

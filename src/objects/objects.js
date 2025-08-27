@@ -793,6 +793,43 @@ Objects.prototype = {
 				obj.setReceiveShadowFloor();
 			} 
 
+			let _selectable = true;
+			//add selectability property to object
+			Object.defineProperty(obj, 'selectable', {
+				get() { return _selectable; },
+				set(value) {
+					_selectable = value;
+				}
+			});
+
+			let _rotatable = true;
+			//add rotatability property to object
+			Object.defineProperty(obj, 'rotatable', {
+				get() { return _rotatable; },
+				set(value) {
+					_rotatable = value;
+				}
+			});
+
+			let _draggable = true;
+			//add draggability property to object
+			Object.defineProperty(obj, 'draggable', {
+				get() { return _draggable; },
+				set(value) {
+					_draggable = value;
+				}
+			});
+
+			let _altitudeChangeable = true;
+			//add draggability property to object
+			Object.defineProperty(obj, 'altitudeChangeable', {
+				get() { return _altitudeChangeable; },
+				set(value) {
+					_altitudeChangeable = value;
+				}
+			});
+			
+
 		}
 
 		obj.add = function (o) {
@@ -1073,7 +1110,11 @@ Objects.prototype = {
 			tooltip: true,
 			raycasted: true,
 			clone: true,
-			withCredentials: false
+			withCredentials: false,
+			selectable: true,
+			rotatable: true,
+			draggable: true,
+			altitudeChangeable: true
 		},
 
 		Object3D: {
@@ -1096,8 +1137,7 @@ Objects.prototype = {
 			anchor: 'center',
 			bbox: true,
 			tooltip: true,
-			raycasted: true
-
+			raycasted: true,
 		}
 	},
 

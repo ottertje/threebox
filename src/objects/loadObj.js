@@ -87,6 +87,14 @@ function loadObj(options, cb, promise) {
 			userScaleGroup.setAnchor(options.anchor);
 			//[jscastro] override the center calculated if the object has adjustments
 			userScaleGroup.setCenter(options.adjustment);
+			//if the object is selectable
+			userScaleGroup.selectable = options.selectable;
+			//if the object is rotatable
+			userScaleGroup.rotatable = options.rotatable;
+			//if the object is draggable
+			userScaleGroup.draggable = options.draggable;
+			//if the object's altitude can be changed
+			userScaleGroup.altitudeChangeable = options.altitudeChangeable
 			//[jscastro] if the object is excluded from raycasting
 			userScaleGroup.raycasted = options.raycasted;
 			//[jscastro] return to cache

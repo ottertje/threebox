@@ -256,20 +256,22 @@ Threebox.prototype = {
 					let nearestObject = Threebox.prototype.findParent3DObject(intersects[0]);
 
 					if (nearestObject) {
-						//if extrusion object selected, unselect
+						//if extrusion object selected, unselect, clean the selection
 						if (this.selectedFeature) {
 							this.unselectFeature(this.selectedFeature);
 						}
 						//if not selected yet, select it
-						if (!this.selectedObject) {
+						if (!this.selectedObject && nearestObject.selectable) {
 							this.selectedObject = nearestObject;
 							this.selectedObject.selected = true;
 						}
 						else if (this.selectedObject.uuid != nearestObject.uuid) {
 							//it's a different object, restore the previous and select the new one
-							this.selectedObject.selected = false;
-							nearestObject.selected = true;
-							this.selectedObject = nearestObject;
+							this.unselectObject();
+							if (nearestObject.selectable) {
+								nearestObject.selected = true;
+								this.selectedObject = nearestObject;
+							}
 
 						} else if (this.selectedObject.uuid == nearestObject.uuid) {
 							//deselect, reset and return
@@ -327,7 +329,7 @@ Threebox.prototype = {
 
 				this.getCanvasContainer().style.cursor = this.tb.defaultCursor;
 				//check if being rotated
-				if (e.originalEvent.altKey && this.draggedObject) {
+				if (e.originalEvent.altKey && this.draggedObject && this.draggedObject.rotatable) {
 
 					if (!map.tb.enableRotatingObjects) return;
 					draggedAction = 'rotate';
@@ -347,7 +349,7 @@ Threebox.prototype = {
 				}
 
 				//check if being moved
-				if (e.originalEvent.shiftKey && this.draggedObject) {
+				if (e.originalEvent.shiftKey && this.draggedObject && this.draggedObject.draggable) {
 					if (!map.tb.enableDraggingObjects) return;
 
 					draggedAction = 'translate';
@@ -362,7 +364,7 @@ Threebox.prototype = {
 				}
 
 				//check if being moved on altitude
-				if (e.originalEvent.ctrlKey && this.draggedObject) {
+				if (e.originalEvent.ctrlKey && this.draggedObject && this.draggedObject.draggable && this.draggedObject.altitudeChangeable) {
 					if (!map.tb.enableDraggingObjects) return;
 					draggedAction = 'altitude';
 					// Set a UI indicator for dragging.
